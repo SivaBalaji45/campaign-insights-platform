@@ -1,0 +1,29 @@
+# Distribution list for the weekly stakeholder report.
+# In "local outbox" delivery mode (the default), the reporting agent renders
+# the report and writes it + this manifest to outbox/ instead of sending
+# anything externally. Swap delivery_mode to "email" or "slack" and fill in
+# the matching section once real credentials are available (see agents/scheduler.py).
+
+delivery_mode: outbox
+
+stakeholders:
+  - name: "VP Marketing"
+    role: exec_sponsor
+    email: "vp-marketing@example.com"
+  - name: "Head of Performance Marketing"
+    role: primary_owner
+    email: "perf-marketing-lead@example.com"
+  - name: "Finance Business Partner"
+    role: budget_owner
+    email: "finance-bp@example.com"
+  - name: "Growth Analytics"
+    role: analyst
+    email: "growth-analytics@example.com"
+
+email:
+  smtp_host: ""
+  smtp_port: 587
+  from_address: ""
+
+slack:
+  webhook_url: ""

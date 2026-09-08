@@ -1,0 +1,177 @@
+# Business rules for the Campaign Insights agent.
+#
+# Each rule is evaluated against the per-campaign trailing-window KPI summary
+# produced by core.kpis.campaign_summary(). A rule fires when its condition(s)
+# are true for a campaign row. Rules sharing a `group` are mutually exclusive:
+# only the highest-severity match per (campaign, group) survives, so a
+# campaign in critical ROAS trouble doesn't also get a redundant warning.
+#
+# severity: critical > warning > opportunity
+#
+# threshold_by_channel lets a rule use a channel-specific bar instead of one
+# global number (e.g. a $20 CPA is healthy for Email but alarming for Search).
+
+targets_cpa_by_channel:
+  Search: 45
+  Social: 35
+  Display: 60
+  Video: 70
+  Email: 20
+  Affiliate: 40
+  default: 50
+
+rules:
+  - id: roas_critical
+    group: roas_health
+    severity: critical
+    metric: roas
+    operator: lt
+    threshold: 1.0
+    title: "ROAS below breakeven"
+    recommended_action: >-
+      Pause spend or fundamentally rework targeting/creative within 48 hours —
+      this campaign is losing money on every dollar spent (ROAS {value:.2f}x).
+    business_impact: >-
+      At the current ROAS, every additional $1,000 spent returns only
+      ${value_per_1000:.0f} in revenue.
+
+  - id: roas_warning
+    group: roas_health
+    severity: warning
+    metric: roas
+    operator: lt
+    threshold: 2.0
+    title: "ROAS below healthy margin"
+    recommended_action: >-
+      Review bid strategy and audience targeting this week; ROAS of {value:.2f}x
+      leaves little room for margin once fulfillment/COGS are factored in.
+    business_impact: >-
+      Revenue is only {value:.2f}x spend — below the 2.0x portfolio guardrail.
+
+  - id: cpa_over_target
+    group: cpa_health
+    severity: warning
+    metric: cpa
+    operator: gt
+    threshold_by_channel: targets_cpa_by_channel
+    multiplier: 1.25
+    title: "CPA above channel target"
+    recommended_action: >-
+      Reallocate budget toward higher-converting ad sets/keywords, or tighten
+      audience targeting; CPA (${value:.2f}) is {pct_over_target:.0f}% above
+      the {channel} target.
+    business_impact: >-
+      Acquiring conversions is costing more than the channel benchmark,
+      compressing margin per acquisition.
+
+  - id: ctr_drop_wow
+    group: ctr_health
+    severity: warning
+    metric: ctr_wow_pct
+    operator: lt
+    threshold: -15
+    title: "CTR dropped week-over-week"
+    recommended_action: >-
+      Refresh ad creative/copy and check for audience overlap or frequency
+      fatigue; CTR fell {value:.1f}% vs. the prior period.
+    business_impact: >-
+      Fewer clicks per impression means the same spend now reaches fewer
+      engaged prospects.
+
+  - id: cvr_drop_wow
+    group: cvr_health
+    severity: warning
+    metric: cvr_wow_pct
+    operator: lt
+    threshold: -20
+    title: "Conversion rate dropped week-over-week"
+    recommended_action: >-
+      Check landing page load time, checkout flow, and conversion tracking
+      for breakage; CVR fell {value:.1f}% vs. the prior period.
+    business_impact: >-
+      Traffic quality/volume held steady but is converting far less
+      efficiently than last period.
+
+  - id: revenue_drop_wow
+    group: revenue_health
+    severity: critical
+    metric: revenue_wow_pct
+    operator: lt
+    threshold: -25
+    title: "Revenue dropped sharply week-over-week"
+    recommended_action: >-
+      Escalate to the campaign owner today; revenue fell {value:.1f}% vs. the
+      prior period, which is outside normal week-to-week variance.
+    business_impact: >-
+      A drop of this size materially affects the portfolio's weekly revenue
+      total, not just this campaign.
+
+  - id: budget_overspend_pacing
+    group: pacing_health
+    severity: warning
+    metric: budget_pacing_ratio
+    operator: gt
+    threshold: 1.15
+    title: "Spend pacing ahead of plan"
+    recommended_action: >-
+      Add daily budget caps or frequency capping; spend is pacing at
+      {value:.0%} of the planned budget for this window.
+    business_impact: >-
+      At this pace the campaign will exhaust its planned budget early and
+      may starve other campaigns later in the period.
+
+  - id: budget_underspend_pacing
+    group: pacing_health
+    severity: opportunity
+    metric: budget_pacing_ratio
+    operator: lt
+    threshold: 0.70
+    title: "Budget under-utilized"
+    recommended_action: >-
+      Raise bids or expand targeting/placements to capture the unused
+      budget; spend is only pacing at {value:.0%} of plan.
+    business_impact: >-
+      Unspent budget here is opportunity cost — it could be reaching more
+      qualified prospects.
+
+  - id: high_performer_scale_opportunity
+    group: scale_opportunity
+    severity: opportunity
+    conditions:
+      - metric: roas
+        operator: gt
+        threshold: 4.0
+        as: value
+      - metric: budget_pacing_ratio
+        operator: lt
+        threshold: 0.95
+        as: pacing_value
+    title: "High-ROAS campaign has room to scale"
+    recommended_action: >-
+      Increase daily budget in controlled increments (e.g. +20-30%) and
+      monitor ROAS; this campaign is returning {value:.2f}x while still
+      under-pacing its current budget.
+    business_impact: >-
+      Incremental budget here is likely to convert at a similarly strong
+      rate, unlike lower-ROAS campaigns.
+
+  - id: efficiency_drop_while_scaling
+    group: efficiency_health
+    severity: critical
+    conditions:
+      - metric: spend_wow_pct
+        operator: gt
+        threshold: 15
+        as: spend_value
+      - metric: roas_wow_pct
+        operator: lt
+        threshold: -20
+        as: value
+    title: "Spend scaled up while efficiency collapsed"
+    recommended_action: >-
+      Pause further budget increases and audit targeting/bid changes made
+      this period; spend rose {spend_value:.0f}% while ROAS fell
+      {value:.1f}% in the same window.
+    business_impact: >-
+      Scaling spend into a campaign whose efficiency is actively declining
+      compounds losses rather than growth.
