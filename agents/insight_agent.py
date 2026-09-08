@@ -14,6 +14,7 @@ from autogen_core.models import ChatCompletionClient
 from autogen_core.tools import FunctionTool
 
 from agents import tools as t
+from agents.model_client import RuleBasedChatCompletionClient
 
 SYSTEM_MESSAGE = """\
 You are the Insight Agent for a paid-media Campaign Performance dashboard.
@@ -101,11 +102,22 @@ def build_tools() -> list[FunctionTool]:
 
 
 def build_insight_agent(model_client: ChatCompletionClient) -> AssistantAgent:
+    # The mock client synthesizes its own narrative on a second create() call
+    # (reflect_on_tool_use=True) and safely terminates the tool-iteration loop
+    # itself. Some real providers' OpenAI-compatible endpoints (Gemini 3.x in
+    # particular, as of this writing) can't reliably round-trip tool-call
+    # results back into a second model call at all — not just for reflection,
+    # but for the "want to call more tools?" check too — so for any real LLM
+    # we cap iterations at 1 (one model call, execute what it asked for, done)
+    # and skip reflection, building the narrative ourselves from the raw tool
+    # results in orchestrator.run_insight_query: real LLM reasoning picks the
+    # tools, our tested formatter grounds the final answer.
+    is_mock = isinstance(model_client, RuleBasedChatCompletionClient)
     return AssistantAgent(
         name="insight_analyst",
         model_client=model_client,
         tools=build_tools(),
         system_message=SYSTEM_MESSAGE,
-        reflect_on_tool_use=True,
-        max_tool_iterations=3,
+        reflect_on_tool_use=is_mock,
+        max_tool_iterations=3 if is_mock else 1,
     )

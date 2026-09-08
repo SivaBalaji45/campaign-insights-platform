@@ -103,6 +103,14 @@ MODEL_PROVIDER=openai
 OPENAI_API_KEY=sk-...
 ```
 
+or (Google AI Studio key, routed through Gemini's OpenAI-compatible endpoint):
+
+```bash
+MODEL_PROVIDER=gemini
+GEMINI_API_KEY=AIza...
+GEMINI_MODEL=gemini-2.0-flash
+```
+
 No other code changes anywhere in `agents/` or `dashboard/` — this is the
 single swap point, by design.
 

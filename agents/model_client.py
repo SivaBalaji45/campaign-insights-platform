@@ -21,7 +21,10 @@ import json
 import os
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Union
+
+from dotenv import load_dotenv
 
 from autogen_core import CancellationToken, FunctionCall
 from autogen_core.models import (
@@ -38,6 +41,8 @@ from autogen_core.models import (
     UserMessage,
 )
 from autogen_core.tools import Tool, ToolSchema
+
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 # ---------------------------------------------------------------------------
 # Intent parsing helpers (shared by the mock client's tool-call decisions and
@@ -388,6 +393,8 @@ def build_model_client(role: str) -> ChatCompletionClient:
 
     MODEL_PROVIDER=anthropic + ANTHROPIC_API_KEY -> real Claude.
     MODEL_PROVIDER=openai    + OPENAI_API_KEY    -> real GPT.
+    MODEL_PROVIDER=gemini    + GEMINI_API_KEY    -> real Gemini (via Google AI Studio's
+                                                     OpenAI-compatible endpoint).
     anything else (default)                     -> RuleBasedChatCompletionClient (no key needed).
     """
     provider = os.getenv("MODEL_PROVIDER", "mock").lower()
@@ -406,6 +413,29 @@ def build_model_client(role: str) -> ChatCompletionClient:
         return OpenAIChatCompletionClient(
             model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
             api_key=os.getenv("OPENAI_API_KEY"),
+        )
+
+    if provider == "gemini" and os.getenv("GEMINI_API_KEY"):
+        from autogen_ext.models.openai import OpenAIChatCompletionClient
+
+        model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+        return OpenAIChatCompletionClient(
+            model=model,
+            api_key=os.getenv("GEMINI_API_KEY"),
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+            # Gemini 3.x's "thinking" mode requires a thought_signature to be
+            # echoed back on every tool-call turn, which the generic OpenAI-
+            # compatible client doesn't preserve -> multi-turn tool calls 400.
+            # reasoning_effort="minimal" disables thinking, avoiding this.
+            reasoning_effort="minimal",
+            model_info={
+                "vision": True,
+                "function_calling": True,
+                "json_output": True,
+                "family": ModelFamily.UNKNOWN,
+                "structured_output": True,
+                "multiple_system_messages": True,
+            },
         )
 
     return RuleBasedChatCompletionClient(persona=role)

@@ -19,11 +19,14 @@ from pathlib import Path
 import markdown as md
 import yaml
 from autogen_agentchat.conditions import MaxMessageTermination, TextMentionTermination
+from autogen_agentchat.messages import TextMessage, ToolCallSummaryMessage
 from autogen_agentchat.teams import RoundRobinGroupChat
 
 from agents.insight_agent import build_insight_agent
-from agents.model_client import build_model_client
+from agents.model_client import _synthesize_insight_response, build_model_client
 from agents.reporting_agent import build_reporting_agent
+from core import kpis
+from core.business_rules import evaluate_rules
 
 OUTBOX_DIR = Path(__file__).parent.parent / "outbox"
 STAKEHOLDERS_PATH = Path(__file__).parent.parent / "config" / "stakeholders.yaml"
@@ -73,8 +76,23 @@ async def run_insight_query(question: str) -> str:
     try:
         result = await agent.run(task=question)
         for msg in reversed(result.messages):
-            if getattr(msg, "source", None) == "insight_analyst" and isinstance(msg.content, str):
+            if getattr(msg, "source", None) != "insight_analyst":
+                continue
+            if isinstance(msg, TextMessage):
+                # Mock client path: it already reflected and wrote the narrative itself.
                 return msg.content
+            if isinstance(msg, ToolCallSummaryMessage):
+                # Real-LLM path (reflect_on_tool_use=False, see insight_agent.py):
+                # the LLM picked the tools for real; we build the grounded
+                # narrative ourselves from the raw results, same code the
+                # mock client uses, so both paths read identically.
+                tool_results: dict = {}
+                for r in msg.results:
+                    try:
+                        tool_results[r.name] = json.loads(r.content)
+                    except (json.JSONDecodeError, TypeError):
+                        tool_results[r.name] = r.content
+                return _synthesize_insight_response(question, tool_results)
         return "No analysis was produced."
     finally:
         await client.close()
@@ -126,11 +144,19 @@ async def run_weekly_workflow() -> WeeklyReportResult:
 
     report_text = report_text.replace("REPORT_COMPLETE", "").strip()
 
-    status_flag = "ok"
-    if "🔴" in report_text or "Action Needed" in report_text:
+    # Ground the status flag in the same business-rule data both agents used,
+    # rather than text-sniffing the LLM's own report — a real model's exact
+    # wording/casing ("ACTION NEEDED" vs "Action Needed") isn't reliable to
+    # pattern-match on, but the underlying severities are.
+    df = kpis.load_data()
+    insights = evaluate_rules(kpis.campaign_summary(df, days=7))
+    severities = {i.severity for i in insights}
+    if "critical" in severities:
         status_flag = "critical"
-    elif "🟡" in report_text or "Review Recommended" in report_text:
+    elif "warning" in severities:
         status_flag = "warning"
+    else:
+        status_flag = "ok"
 
     stakeholders_cfg = _load_stakeholders()
     recipients = ", ".join(s["name"] for s in stakeholders_cfg.get("stakeholders", []))
@@ -143,13 +169,23 @@ async def run_weekly_workflow() -> WeeklyReportResult:
     md_path.write_text(report_text)
 
     status_class = {"critical": "", "warning": "warn", "ok": "ok"}[status_flag]
-    body_html = md.markdown(report_text, extensions=["extra"])
-    body_html = re.sub(
-        r"<p><strong>Status:\s*(.*?)</strong></p>",
-        rf'<p><span class="status {status_class}">\1</span></p>',
-        body_html,
-        count=1,
-    )
+    status_label = {
+        "critical": "🔴 Action Needed",
+        "warning": "🟡 Review Recommended",
+        "ok": "🟢 On Track",
+    }[status_flag]
+
+    # Strip any status line the writing agent produced itself — wording and
+    # casing vary by model ("Status: ..." vs "**Status Flag: ACTION NEEDED**"),
+    # so we render our own badge from the grounded status_flag instead of
+    # trying to pattern-match the model's text.
+    report_text_for_render = re.sub(r"(?im)^\*{0,2}status[^\n]*\*{0,2}\s*\n+", "", report_text, count=1)
+    body_html = md.markdown(report_text_for_render, extensions=["extra"])
+    badge_html = f'<p><span class="status {status_class}">{status_label}</span></p>'
+    if "<h1>" in body_html:
+        body_html = body_html.replace("</h1>", "</h1>\n" + badge_html, 1)
+    else:
+        body_html = badge_html + body_html
     html_path = OUTBOX_DIR / f"weekly_report_{stamp}.html"
     html_path.write_text(
         REPORT_HTML_SHELL.format(
